@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phishing Detector (Async)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .result-card { transition: all 0.3s ease-in-out; }
+        .details-section { max-height: 0; overflow: hidden; transition: max-height 0.5s ease-in-out; }
+        .details-section.open { max-height: 1000px; }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-2xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-800 dark:text-white">Phishing Detector</h1>
+            <p class="text-gray-600 dark:text-gray-400 mt-2">Enter a URL to check for phishing threats. Analysis is done in the background.</p>
+        </header>
+
+        <main>
+            <div class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <input type="url" id="urlInput" class="flex-grow p-3 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white" placeholder="https://example.com">
+                    <button id="checkUrlBtn" class="bg-blue-600 text-white font-semibold py-3 px-6 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition duration-300">
+                        Check URL
+                    </button>
+                </div>
+            </div>
+
+            <!-- Status/Loading Area -->
+            <div id="statusArea" class="text-center my-8 hidden">
+                 <svg class="animate-spin h-8 w-8 text-blue-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p id="statusText" class="mt-2 text-gray-600 dark:text-gray-400">Submitting URL...</p>
+            </div>
+            
+            <div id="errorMessage" class="hidden my-4 p-4 bg-red-100 dark:bg-red-900 border border-red-400 dark:border-red-600 text-red-700 dark:text-red-200 rounded-lg"></div>
+
+            <div id="results" class="mt-8 space-y-6 hidden">
+                 <!-- Overall Analysis -->
+                <div id="overallAnalysis" class="result-card bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
+                    <h2 class="text-2xl font-bold mb-4">Overall Analysis</h2>
+                    <div class="text-center p-4 rounded-lg">
+                         <p class="text-lg font-medium">Risk Level: <span id="riskLevel" class="font-bold"></span></p>
+                        <p id="recommendation" class="mt-2 text-base"></p>
+                    </div>
+                    <div class="flex items-center justify-center mt-4">
+                        <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
+                            <div id="riskScoreBar" class="h-4 rounded-full" style="width: 0%;"></div>
+                        </div>
+                        <span id="riskScore" class="ml-4 font-bold text-lg"></span>
+                    </div>
+                     <p class="text-center text-sm text-gray-500 dark:text-gray-400 mt-2">Confidence: <span id="confidence"></span></p>
+                </div>
+
+                <div class="text-center">
+                    <button id="toggleDetailsBtn" class="text-blue-600 dark:text-blue-400 hover:underline">Show Detailed Results</button>
+                </div>
+                <div id="detailedResults" class="details-section space-y-6">
+                    <div class="result-card bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
+                        <h3 class="text-xl font-semibold mb-4">Machine Learning Analysis</h3>
+                        <p><strong>Risk Probability:</strong> <span id="mlProbability"></span>%</p>
+                        <h4 class="font-semibold mt-4 mb-2">Key Features:</h4>
+                        <pre id="mlFeatures" class="bg-gray-100 dark:bg-gray-700 p-4 rounded-md text-sm overflow-x-auto"></pre>
+                    </div>
+                    <div class="result-card bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
+                        <h3 class="text-xl font-semibold mb-4">External API Scan Results</h3>
+                        <div id="apiResults" class="space-y-4"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const urlInput = document.getElementById('urlInput');
+        const checkUrlBtn = document.getElementById('checkUrlBtn');
+        const statusArea = document.getElementById('statusArea');
+        const statusText = document.getElementById('statusText');
+        const resultsDiv = document.getElementById('results');
+        const errorMessageDiv = document.getElementById('errorMessage');
+
+        let pollingInterval;
+
+        checkUrlBtn.addEventListener('click', async () => {
+            const url = urlInput.value.trim();
+            if (!url) {
+                displayError('Please enter a URL.');
+                return;
+            }
+
+            // Reset UI
+            if (pollingInterval) clearInterval(pollingInterval);
+            resultsDiv.classList.add('hidden');
+            errorMessageDiv.classList.add('hidden');
+            statusArea.classList.remove('hidden');
+            statusText.textContent = 'Submitting URL for analysis...';
+            checkUrlBtn.disabled = true;
+
+            try {
+                // Step 1: Submit the URL and get a job ID
+                const submitResponse = await fetch('http://localhost:3000/api/submit-url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                if (!submitResponse.ok) {
+                    const errorData = await submitResponse.json();
+                    throw new Error(errorData.error || `Submission failed with status: ${submitResponse.status}`);
+                }
+
+                const { jobId } = await submitResponse.json();
+                statusText.textContent = 'Analysis in progress... Please wait.';
+
+                // Step 2: Poll for the results
+                pollForResults(jobId);
+
+            } catch (error) {
+                console.error('Error submitting URL:', error);
+                displayError(`Submission failed: ${error.message}`);
+                statusArea.classList.add('hidden');
+                checkUrlBtn.disabled = false;
+            }
+        });
+
+        /**
+         * Polls the status endpoint until the job is completed or fails.
+         * @param {string} jobId - The ID of the job to check.
+         */
+        function pollForResults(jobId) {
+            pollingInterval = setInterval(async () => {
+                try {
+                    const statusResponse = await fetch(`http://localhost:3000/api/check-status/${jobId}`);
+                    if (!statusResponse.ok) {
+                         throw new Error(`Status check failed: ${statusResponse.status}`);
+                    }
+                    const result = await statusResponse.json();
+
+                    if (result.status === 'COMPLETED') {
+                        clearInterval(pollingInterval);
+                        statusArea.classList.add('hidden');
+                        displayResults(result.data);
+                        checkUrlBtn.disabled = false;
+                    } else if (result.status === 'FAILED') {
+                        clearInterval(pollingInterval);
+                        displayError(result.error || 'The analysis failed.');
+                        statusArea.classList.add('hidden');
+                        checkUrlBtn.disabled = false;
+                    }
+                    // If status is 'PENDING' or 'PROCESSING', do nothing and wait for the next interval.
+
+                } catch (error) {
+                    clearInterval(pollingInterval);
+                    console.error('Error polling for results:', error);
+                    displayError('Could not retrieve analysis results.');
+                    statusArea.classList.add('hidden');
+                    checkUrlBtn.disabled = false;
+                }
+            }, 3000); // Poll every 3 seconds
+        }
+
+        function displayError(message) { /* ... same as before ... */ errorMessageDiv.textContent = message; errorMessageDiv.classList.remove('hidden'); resultsDiv.classList.add('hidden'); }
+        function displayResults(data) { /* ... same as before ... */ 
+            document.getElementById('riskLevel').textContent = data.ml_enhanced_analysis.risk_level;
+            document.getElementById('recommendation').textContent = data.ml_enhanced_analysis.recommendation;
+            const riskScoreBar = document.getElementById('riskScoreBar');
+            riskScoreBar.style.width = `${data.ml_enhanced_analysis.overall_risk_score}%`;
+            riskScoreBar.className = `h-4 rounded-full ${getRiskColor(data.ml_enhanced_analysis.risk_level)}`;
+            document.getElementById('riskScore').textContent = `${data.ml_enhanced_analysis.overall_risk_score}%`;
+            document.getElementById('confidence').textContent = `${data.ml_enhanced_analysis.confidence}%`;
+            document.getElementById('mlProbability').textContent = data.machine_learning.risk_probability;
+            document.getElementById('mlFeatures').textContent = JSON.stringify(data.machine_learning.key_features, null, 2);
+            const apiResultsContainer = document.getElementById('apiResults');
+            apiResultsContainer.innerHTML = '';
+            for (const service in data.api_results) {
+                const result = data.api_results[service];
+                const card = document.createElement('div');
+                card.className = `p-4 border-l-4 rounded-r-lg bg-gray-50 dark:bg-gray-700 ${getRiskColor(result.risk_level, 'border')}`;
+                card.innerHTML = `<h4 class="font-bold">${result.service}</h4><p>Risk Level: <span class="font-semibold">${result.risk_level || 'N/A'}</span></p>`;
+                apiResultsContainer.appendChild(card);
+            }
+            resultsDiv.classList.remove('hidden');
+        }
+        function getRiskColor(level, type = 'bg') { switch(level) { case 'HIGH': return `${type}-red-500`; case 'MEDIUM': return `${type}-yellow-500`; case 'LOW': return `${type}-green-500`; default: return `${type}-gray-400`; } }
+        document.getElementById('toggleDetailsBtn').addEventListener('click', () => { document.getElementById('detailedResults').classList.toggle('open'); });
+    </script>
+</body>
+</html>
